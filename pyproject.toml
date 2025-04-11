@@ -8,6 +8,9 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "streamlit (>=1.44.1,<2.0.0)",
+    "openai (>=1.72.0,<2.0.0)",
+    "python-dotenv (>=1.1.0,<2.0.0)"
 ]
 
 
