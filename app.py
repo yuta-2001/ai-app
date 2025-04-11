@@ -1,37 +1,59 @@
 import os
+import re
 import json
 from dataclasses import dataclass
 from typing import List, Any
 
 import streamlit as st
-import openai
+from openai import OpenAI
 from dotenv import load_dotenv
 
-# 環境変数 "ENV" が "production" でない場合は .env ファイルを読み込みます。
+# 開発環境の場合、.env から環境変数をロード（本番では外部環境変数利用）
 if os.getenv("ENV", "development") != "production":
     load_dotenv()
 
-# 環境変数から API キーを取得（プロダクションでは必ず外部から設定してください）
-openai.api_key = os.getenv("OPENAI_API_KEY")
-if not openai.api_key:
+openai_api_key = os.getenv("OPENAI_API_KEY")
+if not openai_api_key:
     st.error("OPENAI_API_KEY が設定されていません。環境変数または .env ファイルを確認してください。")
+
+client = OpenAI(api_key=openai_api_key)
+
 
 @dataclass
 class Restaurant:
     name: str
     address: str
     genre: str
-    budget: str  # 例: '1000円' などの文字列形式
+    budget: str  # 例: '1000円以下' のような文字列
+
+
+def safe_parse_json(json_string: str) -> Any:
+    """
+    JSONDecodeError が発生した場合でも、正規表現で
+    完全な JSON オブジェクト部分だけを抽出して返す補助関数。
+    """
+    try:
+        return json.loads(json_string)
+    except json.JSONDecodeError:
+        matches = re.findall(r'\{.*?\}', json_string, re.DOTALL)
+        parsed_objects = []
+        for match in matches:
+            try:
+                obj = json.loads(match)
+                parsed_objects.append(obj)
+            except json.JSONDecodeError:
+                continue
+        return parsed_objects
 
 
 def generate_restaurant_recommendations(genre: str, budget: int) -> List[Restaurant]:
     """
     OpenAI API を利用して、指定のジャンルと予算に合わせた食事処のおすすめ情報を取得します。
-    
-    パラメータ:
+
+    パラメーター:
       - genre (str): 例 "日本食", "中華" など
       - budget (int): 予算の目安（円）
-    
+
     戻り値:
       List[Restaurant]: レストラン情報のリスト（名前、住所、ジャンル、予算）
     """
@@ -41,30 +63,38 @@ def generate_restaurant_recommendations(genre: str, budget: int) -> List[Restaur
         f"- 予算: 約{budget}円以下\n"
         f"各レストランは 'name', 'address', 'genre', 'budget' のキーを持っていること。"
     )
-    
+
     try:
-        response: Any = openai.ChatCompletion.create(
+        completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
-            max_tokens=150
+            max_tokens=150,
         )
-        message = response['choices'][0]['message']['content']
-        # LLM の出力を JSON としてパース
-        restaurants_data = json.loads(message)
-        restaurants = [Restaurant(**restaurant) for restaurant in restaurants_data]
+        message_content = completion.choices[0].message.content
+        # 直接 JSON を試みる。切れている場合は safe_parse_json により部分的な抽出を試みる
+        restaurants_data = safe_parse_json(message_content)
+        
+        # restaurants_data がリストでない場合は、直接リストに変換する
+        if not isinstance(restaurants_data, list):
+            restaurants_data = [restaurants_data]
+            
+        restaurants = [Restaurant(**restaurant) for restaurant in restaurants_data if isinstance(restaurant, dict)]
+        if not restaurants:
+            raise ValueError("抽出されたレストラン情報が空です。")
         return restaurants
-    except Exception as e:
-        st.error("LLM の結果取得に失敗しました。サンプルデータを表示します。")
-        # フォールバックとしてサンプルデータを返す
-        sample_restaurant = Restaurant(
-            name="サンプル食堂",
-            address="東京都新宿区サンプル1-2-3",
-            genre=genre,
-            budget=f"{budget}円"
-        )
-        return [sample_restaurant]
 
+    except Exception as e:
+        st.error(f"LLM の結果取得に失敗しました: {e}")
+        # フォールバックのためのサンプルデータ
+        return [
+            Restaurant(
+                name="サンプル食堂",
+                address="東京都新宿区サンプル1-2-3",
+                genre=genre,
+                budget=f"{budget}円以下",
+            )
+        ]
 
 def main() -> None:
     st.set_page_config(page_title="食事処検索サイト", layout="wide")
@@ -95,3 +125,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
